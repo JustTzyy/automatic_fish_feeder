@@ -84,7 +84,7 @@
             </div>
         </div>
 
-        <div class="footer">Keep this page open to auto-feed when the timer ends.</div>
+        <div class="footer"></div>
     </div>
 </div>
 </body>
