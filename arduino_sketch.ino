@@ -75,7 +75,7 @@ void loop() {
       // Manual feed: direct servo control (separate from automatic)
       myServo.attach(servoPin);
       delay(100);
-      myServo.write(180);   // move to feeding position (180°)
+      myServo.write(90);    // move to feeding position (90°)
       delay(1000);          // wait 1s for feeding
       myServo.write(0);     // return to rest position (0°)
       delay(500);           // wait 0.5s
@@ -131,7 +131,7 @@ void feedFish(int times) {
     Serial.print(" of ");
     Serial.println(times);
     
-    myServo.write(180);   // move to feeding position (180°)
+    myServo.write(90);    // move to feeding position (90°)
     delay(1000);          // wait 1s for feeding
     myServo.write(0);     // return to rest position (0°)
     delay(500);           // wait 0.5s between cycles

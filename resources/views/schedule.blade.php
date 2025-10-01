@@ -99,8 +99,43 @@
     var stopBtn = document.getElementById('stopBtn');
     var manualFeeding = false;  // Separate flag for manual feeding
     var autoFeeding = false;    // Separate flag for automatic feeding
+    var lastUpdateTime = Date.now(); // Track when we last got data from server
 
     function fmt(n){ return n < 10 ? ('0'+n) : n; }
+
+    function updateFromServer() {
+        // Fetch current timer state from server every 30 seconds
+        fetch('{{ route('schedule.timer') }}', { 
+            method: 'GET', 
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.remainingSeconds !== undefined) {
+                var serverRemaining = data.remainingSeconds;
+                var difference = Math.abs(serverRemaining - remaining);
+                
+                // Only sync if there's a significant difference (more than 10 seconds)
+                // This prevents the timer from jumping around due to minor timing differences
+                if (difference > 10) {
+                    remaining = serverRemaining;
+                    lastUpdateTime = Date.now();
+                    console.log('Timer synced from server:', remaining, 'seconds remaining (diff:', difference, ')');
+                } else {
+                    console.log('Timer sync skipped - client and server in sync (diff:', difference, ')');
+                }
+            }
+        })
+        .catch(function(error) {
+            console.log('Failed to update from server:', error);
+        });
+    }
 
     function tick(){
         if (!el) return;
@@ -121,7 +156,7 @@
         var d = Math.floor(r / 86400);
         var h = Math.floor((r % 86400) / 3600);
         var m = Math.floor((r % 3600) / 60);
-        var s = r % 60;
+        var s = Math.floor(r % 60); // Use Math.floor to ensure clean integer seconds
         el.textContent = (d + 'd ') + fmt(h) + ':' + fmt(m) + ':' + fmt(s);
 
         if (remaining <= 0 && !firing && !manualFeeding && !formSubmitted && !paused) {
@@ -129,18 +164,24 @@
             feeding = true;
             autoFeeding = true;
 
-            // Auto timer → Arduino always feeds 1x
-            fetch('{{ route('schedule.autoFeed') }}', { method: 'GET', credentials: 'same-origin' })
-                .catch(function(_) {})
-                .finally(function(){
-                    // pause ~2s to let servo finish
-                    setTimeout(function(){
-                        remaining = intervalMinutes * 60;  // Reset timer to full interval
-                        feeding = false;
-                        firing = false;
-                        autoFeeding = false;
-                    }, 2000);
-                });
+            // Show 0 for a moment before triggering auto-feed
+            setTimeout(function(){
+                // Auto timer → Arduino always feeds 1x
+                fetch('{{ route('schedule.autoFeed') }}', { method: 'GET', credentials: 'same-origin' })
+                    .catch(function(_) {})
+                    .finally(function(){
+                        // pause ~2s to let servo finish
+                        setTimeout(function(){
+                            // Reset timer to full interval after auto feed
+                            remaining = intervalMinutes * 60;
+                            feeding = false;
+                            firing = false;
+                            autoFeeding = false;
+                            lastUpdateTime = Date.now();
+                            console.log('Auto feed completed, timer reset to full interval');
+                        }, 2000);
+                    });
+            }, 1000); // Show 0 for 1 second before feeding
         } else if (!manualFeeding && !formSubmitted && !paused) {
             remaining -= 1;
         }
@@ -148,6 +189,8 @@
 
     tick();
     setInterval(tick, 1000);
+    // Update from server every 30 seconds to keep timer accurate
+    setInterval(updateFromServer, 30000);
 
     function setPaused(next) {
         paused = !!next;
@@ -205,7 +248,9 @@
                     manualFeeding = false;
                     feedBtn.disabled = false;
                     feedBtn.textContent = 'Feed Now';
-                    console.log('Manual feed reset, button enabled - timer continues from where it was');
+                    // Refresh timer from server after manual feed
+                    updateFromServer();
+                    console.log('Manual feed reset, button enabled - timer refreshed from server');
                 }, 2000);  // Reduced timeout to 2 seconds for faster response
             });
         });

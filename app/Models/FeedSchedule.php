@@ -9,5 +9,9 @@ class FeedSchedule extends Model
 {
     use HasFactory;
 
-    protected $fillable = ["feed_time" ];
+    protected $fillable = ["feed_time", "last_feed_at", "interval_seconds"];
+    
+    protected $casts = [
+        'last_feed_at' => 'datetime',
+    ];
 }

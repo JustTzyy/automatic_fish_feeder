@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
+use App\Models\FeedSchedule;
 
 class FeedScheduleController extends Controller
 {
@@ -18,6 +19,19 @@ class FeedScheduleController extends Controller
         $this->pythonPath = env('PYTHON_PATH', 'python');
         // Build an absolute path to the bundled python script
         $this->pythonScript = base_path('python/arduino_serial.py');
+    }
+
+    protected function getOrCreateSchedule()
+    {
+        $schedule = FeedSchedule::first();
+        if (!$schedule) {
+            $schedule = FeedSchedule::create([
+                'feed_time' => '12:00:00',
+                'interval_seconds' => 3600, // Default 1 hour
+                'last_feed_at' => null,
+            ]);
+        }
+        return $schedule;
     }
 
     protected function resolvePythonCommand(): array
@@ -55,19 +69,19 @@ class FeedScheduleController extends Controller
     // Show dashboard
     public function index()
     {
-        // Prefer seconds if present; fall back to minutes for backward compatibility
-        $intervalSeconds = (int) session('interval_seconds', 0);
-        if ($intervalSeconds <= 0) {
-            $intervalMinutesLegacy = (int) session('interval_minutes', 60); // default 60 minutes
-            $intervalSeconds = $intervalMinutesLegacy * 60;
+        $schedule = $this->getOrCreateSchedule();
+        $intervalSeconds = $schedule->interval_seconds;
+        
+        // Calculate remaining time based on last feed time
+        $remainingSeconds = 0;
+        if ($schedule->last_feed_at) {
+            $now = Carbon::now();
+            $nextFeedTime = $schedule->last_feed_at->addSeconds($intervalSeconds);
+            $remainingSeconds = max(0, $now->diffInSeconds($nextFeedTime, false));
+        } else {
+            // If no last feed time, show full interval
+            $remainingSeconds = $intervalSeconds;
         }
-
-        $lastSetAtMs = (int) session('last_set_at_ms', 0);
-
-        $intervalMs = $intervalSeconds * 1000;
-        $nowMs = (int) round(microtime(true) * 1000);
-        $elapsedMs = $lastSetAtMs > 0 ? max(0, $nowMs - $lastSetAtMs) : 0;
-        $remainingSeconds = (int) max(0, floor(($intervalMs - $elapsedMs) / 1000));
 
         // Break into D/H/M/S for default form values
         $d = intdiv($intervalSeconds, 86400);
@@ -79,6 +93,31 @@ class FeedScheduleController extends Controller
         $intervalMinutes = (int) round($intervalSeconds / 60);
 
         return view('schedule', compact('intervalMinutes', 'remainingSeconds', 'd', 'h', 'm', 's'));
+    }
+
+    // API endpoint to get current timer state
+    public function getTimer()
+    {
+        $schedule = $this->getOrCreateSchedule();
+        $intervalSeconds = $schedule->interval_seconds;
+        
+        // Calculate remaining time based on last feed time
+        $remainingSeconds = 0;
+        if ($schedule->last_feed_at) {
+            $now = Carbon::now();
+            $nextFeedTime = $schedule->last_feed_at->addSeconds($intervalSeconds);
+            $remainingSeconds = max(0, $now->diffInSeconds($nextFeedTime, false));
+        } else {
+            // If no last feed time, show full interval
+            $remainingSeconds = $intervalSeconds;
+        }
+
+        return response()->json([
+            'remainingSeconds' => $remainingSeconds,
+            'intervalSeconds' => $intervalSeconds,
+            'intervalMinutes' => (int) round($intervalSeconds / 60),
+            'lastFeedAt' => $schedule->last_feed_at ? $schedule->last_feed_at->toISOString() : null,
+        ]);
     }
 
     // Update feeding schedule (timer-based D/H/M/S)
@@ -100,9 +139,9 @@ class FeedScheduleController extends Controller
             return redirect()->route('schedule.index')->with('error', 'Please choose between 1 minute and 7 days.');
         }
 
-        // Persist seconds (and legacy minutes for compatibility)
-        session(['interval_seconds' => $totalSeconds]);
-        session(['interval_minutes' => (int) round($totalSeconds / 60)]);
+        // Update database with new interval
+        $schedule = $this->getOrCreateSchedule();
+        $schedule->update(['interval_seconds' => $totalSeconds]);
 
         $intervalMs = $totalSeconds * 1000;
 
@@ -124,9 +163,6 @@ class FeedScheduleController extends Controller
             ]);
             return redirect()->route('schedule.index')->with('error', 'Failed to update feeding schedule (see logs).');
         }
-
-        // Track when we applied the timer to show a live countdown in the UI
-        session(['last_set_at_ms' => (int) round(microtime(true) * 1000)]);
 
         return redirect()->route('schedule.index')->with('success', 'Timer updated!');
     }
@@ -186,6 +222,10 @@ class FeedScheduleController extends Controller
             return response()->json(['success' => false, 'message' => 'Manual feed failed (see logs).'], 500);
         }
 
+        // Update last feed time in database
+        $schedule = $this->getOrCreateSchedule();
+        $schedule->update(['last_feed_at' => Carbon::now()]);
+
         return response()->json(['success' => true, 'message' => 'Arduino fed manually (1x)!']);
     }
 
@@ -210,6 +250,10 @@ class FeedScheduleController extends Controller
             ]);
             return redirect()->route('schedule.index')->with('error', 'Automatic feed failed (see logs).');
         }
+
+        // Update last feed time in database
+        $schedule = $this->getOrCreateSchedule();
+        $schedule->update(['last_feed_at' => Carbon::now()]);
 
         return redirect()->route('schedule.index')->with('success', 'Arduino fed automatically (1x)!');
     }
